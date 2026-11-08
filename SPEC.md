@@ -1,11 +1,11 @@
 # Timemore Dot Panel — Especificación del proyecto
 
-Panel de control físico, independiente y de código abierto para la báscula **Timemore Black Mirror Dot**, que no tiene pantalla. Muestra el peso, el tiempo, el ratio, el caudal y la curva de extracción en varias pantallas, y se maneja con dos encoders giratorios. Sirve para **espresso** y para **filtrado (pour-over)**, sin apps, registro ni login. Funciona con batería recargable por USB-C.
+Panel de control físico, independiente y de código abierto para la báscula **Timemore Black Mirror Dot**, que no tiene pantalla. Muestra el peso, el tiempo, el ratio, el caudal y la curva de extracción en varias pantallas, y se maneja con dos encoders giratorios. Sirve para **espresso** y para **filtrado (pour-over)**, sin apps, registro ni login. Funciona con batería recargable por USB-C. Además mide la **temperatura del líquido** (mezcla del filtrado, leche) con una sonda PT1000 y la muestra junto al peso y el caudal en la misma curva.
 
 | | |
 | :--- | :--- |
 | **Estado** | Especificación (fase 0 pendiente) |
-| **Fecha** | 2026-11-07 |
+| **Fecha** | 2026-11-07 (actualizada 2026-11-08: temperatura del líquido, fase 6) |
 | **Proyecto relacionado** | [BLE Scale Translator Bridge](https://github.com/jcallano/BLE-_Scale_Translator_Bridge__Wendougee_E-Bar): de él se reutiliza el driver BLE de la Dot, ya validado en hardware |
 
 ---
@@ -18,6 +18,8 @@ Panel de control físico, independiente y de código abierto para la báscula **
 3. Guiar shots de espresso (dosis → ratio → objetivo) y preparaciones de filtrado (bloom, etapas y ritmo de vertido).
 4. Funcionar con batería y cargarse con cualquier cargador USB-C.
 5. Usar hardware fácil de conseguir (la mayoría ya está en la caja de componentes) y bibliotecas de código abierto.
+6. Medir la **temperatura del líquido** con una sonda sumergible y unirla en una sola curva de peso, caudal y temperatura. Ningún proyecto abierto lo hace hoy (ver 4.5).
+7. **Devolver algo a la comunidad:** publicar la temperatura en formatos que Decaid y Beanconqueror ya entienden, documentar el perfil BLE del panel y publicar el hardware completo.
 
 **Fuera de alcance (por ahora)**
 - Funcionar **a la vez** que el puente o que Decaid. La Dot acepta **una sola conexión BLE**. El panel es un dispositivo aparte, en su propia placa, así que el puente (ESP32-S3-Zero) sigue intacto, pero solo uno de los dos puede estar conectado a la Dot en cada momento. El panel tendrá una opción para **liberar la báscula**.
@@ -45,6 +47,9 @@ Panel de control físico, independiente y de código abierto para la báscula **
 | 11 | **Interruptor deslizante** | Corte total de energía (almacenamiento) | — | ~0.10 USD |
 | 12 | **2× resistencia 220 kΩ + condensador 100 nF** | Divisor para medir la batería | ADC | ~0.05 USD |
 | 13 | **Resistencia 100 Ω** | En serie con el piezo | — | ~0.01 USD |
+| 14 | **Módulo MAX31865 en versión PT1000** (resistencia de referencia de **4.3 kΩ**, no la de 430 Ω de PT100), configurado a **3 hilos** | Convertidor de la sonda RTD | SPI | ~5–8 USD *(fase 6a)* |
+| 15 | **Sonda PT1000 de 3 hilos**, vaina de acero inox de **3 mm**, 10–15 cm de largo, cable de silicona o PTFE de 1–1.5 m | Temperatura del líquido. La vaina fina da la respuesta rápida (~1–3 s en agua). | — | ~5–10 USD *(fase 6a)* |
+| 16 | **Conector de quita y pon** para la sonda (jack de 3.5 mm de 3 polos o GX12) | Desconectarla para lavarla | — | ~1 USD *(fase 6a)* |
 
 ### 2.2. Distribución de las pantallas y controles (vista frontal)
 
@@ -87,11 +92,12 @@ Las OLED por I2C suelen venir en `0x3C`, y algunas pueden cambiarse a `0x3D` con
 | **Piezo** | PWM (LEDC) | **2** | con 100 Ω en serie, a GND |
 | **Batería** (divisor 220k/220k + 100 nF) | ADC1_CH0 | **1** | lee VBAT/2 (≤ 2.1 V) |
 | **LED RGB integrado** (WS2812) | Datos | **38** | Opcional: estado de BLE, carga o aviso |
-| **Libres para ampliaciones** | — | 39, 40, 41, 42, 47, 48 | |
+| **MAX31865** (sonda PT1000) | SCLK / MOSI / MISO / CS | **12 / 11 / 39 / 40** | Comparte SCLK y MOSI con la TFT. El MAX31865 usa **SPI modo 1** y la TFT modo 0/3: se cambia el modo en cada transacción. Si da problemas, se le da un bus propio en los pines libres. |
+| **Libres para ampliaciones** | — | 41, 42, 47, 48 | |
 
 Todos los módulos se alimentan a **3.3 V**, incluidos los encoders KY-040. Así sus resistencias pull-up no meten 5 V en los GPIO.
 
-> Si alguna OLED es de 7 pines (SPI), comparte SCLK y MOSI con la TFT y usa su propio CS (GPIO 39–42). Ese bus I2C quedaría libre.
+> Si alguna OLED es de 7 pines (SPI), comparte SCLK y MOSI con la TFT y usa su propio CS (GPIO 41 o 42). Ese bus I2C quedaría libre.
 
 ### 2.4. Alimentación
 
@@ -133,6 +139,7 @@ USB-C ─► TP4056 (con protección) ─OUT+─► Interruptor ─► Schottky 
 | [U8g2](https://github.com/olikraus/u8g2) | BSD-2 | Las tres OLED (SSD1309, SH1106, SSD1306) con fuentes numéricas grandes |
 | [LovyanGFX](https://github.com/lovyan03/LovyanGFX) | FreeBSD | TFT ST7789 172×320 y la gráfica |
 | Arduino-ESP32 3.3.x | LGPL-2.1 | Plataforma |
+| [Adafruit MAX31865](https://github.com/adafruit/Adafruit_MAX31865) | Abierta (Adafruit) | Lectura de la PT1000 con fórmula Callendar–Van Dusen *(fase 6a)* |
 
 LVGL se descarta: con OLED monocromas y una sola gráfica, U8g2 + LovyanGFX es más simple y ligero.
 
@@ -144,6 +151,7 @@ LVGL se descarta: con OLED monocromas y una sola gráfica, U8g2 + LovyanGFX es m
 | 1 | `scale_link` | Escaneo, conexión, secuencia de inicio de la Dot, sondeo cada 10 s, tara física, liberar la báscula. |
 | 1 | `ui` | Lee los encoders (por interrupciones y máquina de estados), lleva el estado de cada modo, redibuja las pantallas y hace sonar el piezo. |
 | 1 | `power` (en `ui` o `loop`) | Mide la batería, gestiona la atenuación y el apagado de las pantallas y el reposo profundo. |
+| 1 | `temp` *(fase 6a)* | Lee el MAX31865 a ~10 Hz (conversión de ~55–65 ms), filtra y publica la temperatura con su marca de tiempo. Detecta la sonda desconectada por el registro de fallos del chip. |
 
 **Frecuencias de refresco:**
 - Peso (2.42"): 10–20 Hz, al ritmo de la Dot (10 Hz).
@@ -212,6 +220,34 @@ Validado en hardware el 2026-11-07. Se basa en las tramas de de1app, [PR #345](h
 - Desplazamiento de 1–2 píxeles del contenido estático cada pocos minutos, contra el quemado.
 - La batería (% y aviso) se muestra en la OLED de 1.3".
 
+### 4.5. Temperatura del líquido (fase 6)
+
+**Valor por uso:**
+
+| Uso | Valor | Motivo |
+| :--- | :--- | :--- |
+| **Filtrado: temperatura de la mezcla (slurry)** | Alto | Es la temperatura real de extracción. Explica diferencias entre preparaciones (precalentado, dripper, ritmo de vertido). |
+| **Vaporizado de leche** | Alto | Pitido al llegar al objetivo (55–65 °C) con anticipación: la leche sube 2–3 °C más tras cortar el vapor. |
+| Agua del hervidor | Medio | Confirma la temperatura de salida (92–96 °C). |
+| Espresso en la taza | Bajo | Se mide después de extraer y depende de la taza; queda como registro. |
+
+**Integración en la interfaz:**
+- Temperatura en la OLED de 1.3", junto al modo, siempre que haya una sonda conectada.
+- **Tercera curva en la TFT**, en otro color, sobre la de peso y caudal.
+- **Modo Leche** (nuevo): temperatura en grande en la OLED de 2.42", objetivo ajustable con el encoder y pitido anticipado según la velocidad de subida (°C/s).
+- **Filtrado:** banda de temperatura de la mezcla, con aviso si cae por debajo del mínimo.
+- **Espresso:** temperatura final en la taza, como dato informativo.
+
+**Panorama de la comunidad** (revisado el 2026-11-08):
+- Beanconqueror integra la Dot y 13 termómetros BLE comerciales, pero como dispositivos separados.
+- Las básculas abiertas (CaffePeso, beeb/coffee-scale-app) no miden temperatura.
+- Coffee Sensor (ESPROFILE) es comercial y mide el grupo E61, no el líquido.
+- **Ningún proyecto abierto combina báscula, temperatura sumergida del líquido y una curva conjunta en un dispositivo autónomo.**
+
+**Compartir con la comunidad (fase 6b):** el panel, además de leer la Dot, publica la temperatura como periférico BLE en formatos ya soportados (es el mismo modo dual del puente):
+- **Decaid:** perfil "Decent Temp", servicio `0001c155-5f7c-ce0b-3342-a58cf0def2d9`, característica `0002c155-5f7c-ce0b-3342-a58cf0def2d9`, temperatura como `int16` / 100 en °C. Fuente: `lib/src/models/device/impl/decent_temp/temperature.dart` de decaid.
+- **Beanconqueror:** uno de los perfiles de termómetro genérico que ya soporta (a elegir en la fase 6b tras revisar `src/classes/devices/`), o un driver nuevo "Timemore Dot Panel" aportado al proyecto.
+
 ---
 
 ## 5. Desarrollo por fases
@@ -260,12 +296,35 @@ Cada fase termina con un firmware que funciona, probado con la Dot real, y con u
 ### Fase 5 (opcional) — Panel y puente en el mismo dispositivo
 - Añadir al panel la función de puente (emulación BooKoo hacia Decaid). Así el panel muestra el peso **mientras** Decaid controla la parada por peso, y desaparece la limitación de una sola conexión a la Dot. La DevKitC tiene recursos de sobra para ambos roles.
 
+### Fase 6a — Temperatura con sonda PT1000 (experimental)
+- Montar el MAX31865 (versión PT1000, 3 hilos) y la sonda con conector de quita y pon.
+- Tarea `temp`, temperatura en la OLED de 1.3", tercera curva en la TFT y **modo Leche** con pitido anticipado.
+- Banda de temperatura en el modo filtrado.
+- **Medición experimental:** tiempo de respuesta de la sonda (pasar de agua a 20 °C a agua a 90 °C y medir el tiempo hasta el 63 % y el 90 % del salto) y precisión contra una referencia (agua hirviendo corregida por altitud y agua con hielo).
+- **Criterio de aceptación:**
+  - error ≤ 0.5 °C contra las referencias;
+  - tiempo de respuesta medido y documentado;
+  - el aviso del modo Leche llega a ±2 °C del objetivo.
+
+### Fase 6b — Compartir la temperatura con la comunidad
+- Publicar la temperatura como periférico BLE con el perfil **"Decent Temp"**, para que Decaid la muestre sin cambios en la app.
+- Publicarla en un perfil que Beanconqueror ya soporte, o aportar un driver nuevo al proyecto (pull request).
+- Documentar el perfil BLE del panel (peso, caudal y temperatura) en el repo.
+- **Criterio de aceptación:** Decaid y Beanconqueror muestran la temperatura del panel en vivo.
+
+### Fase 6c (opcional) — Boya inalámbrica con supercondensador
+- Segundo dispositivo del ecosistema, con su propio repo:
+  - flotador sellado (electrónica y antena fuera del líquido) con un vástago de acero que lleva el sensor;
+  - XIAO nRF52840 y sensor TMP117;
+  - supercondensador de 1 F / 5.5 V y carga por contactos pogo magnéticos (o Qi).
+- Coste estimado: 26–40 USD en componentes por unidad (50–80 USD contando prototipos). Autonomía estimada: 30–50 min por carga.
+- El panel la lee por BLE igual que a la Dot; solo cambia la fuente del dato.
+- **Condición para empezar:** que la fase 6a demuestre que la temperatura aporta en el uso diario.
+
 ---
 
 ## 6. Decisiones pendientes
 
-| # | Pregunta | Afecta a |
-| :---: | :--- | :--- |
 Las tres se resuelven con pruebas físicas en la **fase 0**.
 
 | # | Pregunta | Cómo se resuelve | Afecta a |
@@ -285,6 +344,8 @@ Las tres se resuelven con pruebas físicas en la **fase 0**.
 | 2026-11-07 | **Zumbador: el módulo piezo del kit Arduino**, alimentado a 3.3 V | Ya está en la caja. Funciona a 3.3 V (algo menos de volumen). Si es pasivo, tonos distintos por PWM; si es activo, un solo tono. |
 | 2026-11-07 | **Caja impresa en 3D** en la **Creality K1 Max**, en **PETG** | Impresora cerrada: PETG sin problemas (y ABS si hiciera falta más resistencia al calor). La caja (~150 × 85 × 45 mm) cabe de sobra en su volumen de 300 mm. |
 | 2026-11-07 | **Cuatro pantallas**: OLED 2.42" (peso), OLED 1.54" (tiempo y ratio), OLED 1.3" (modo y estado), TFT 1.47" (curva) | Aprovecha los módulos de la caja; separa la información por importancia. |
+| 2026-11-08 | **Temperatura con sonda PT1000 con cable + MAX31865** para las pruebas (fase 6a), antes que el infrarrojo o la boya inalámbrica | Barato (10–18 USD), rápido de montar y preciso (±0.1–0.3 °C). Con vaina de 3 mm responde en ~1–3 s. El infrarrojo mide solo la superficie y lo falsea el vapor; la boya es un subproyecto completo y queda como fase 6c. |
+| 2026-11-08 | **Publicar la temperatura en formatos que las apps ya entienden** ("Decent Temp" para Decaid; perfil compatible con Beanconqueror) | Devolver valor a la comunidad sin exigir cambios en esas apps. |
 
 ---
 
@@ -300,6 +361,9 @@ Las tres se resuelven con pruebas físicas en la **fase 0**.
 | Consumo en reposo de la DevKitC (LED de encendido y chip USB-serie) | Interruptor de corte; opcionalmente, quitar el LED de encendido. |
 | El calor y el vapor de la máquina deforman la caja | PETG o ABS; ubicarla lejos de la salida de vapor. |
 | Batería de litio junto a una fuente de calor | Módulo con protección, portapilas ventilado y nunca encima de la máquina. |
+| Módulo MAX31865 con la resistencia de PT100 (430 Ω) en lugar de la de PT1000 (4.3 kΩ) | Comprar la versión PT1000 o cambiar la resistencia; se verifica en la fase 6a. |
+| Conflicto de modo SPI entre el MAX31865 (modo 1) y la TFT | Cambiar el modo por transacción o darle un bus SPI propio en pines libres. |
+| Higiene de la sonda en contacto con alimentos | Vaina de acero inox 316, conector de quita y pon para lavarla, cable de silicona apto para alimentos. |
 
 ---
 
@@ -310,3 +374,7 @@ Las tres se resuelven con pruebas físicas en la **fase 0**.
 - Puente BLE (origen del driver reutilizado): <https://github.com/jcallano/BLE-_Scale_Translator_Bridge__Wendougee_E-Bar>
 - ESP32-S3-DevKitC-1 (guía de usuario y esquemas): <https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32s3/esp32-s3-devkitc-1/>
 - U8g2: <https://github.com/olikraus/u8g2> · LovyanGFX: <https://github.com/lovyan03/LovyanGFX> · NimBLE-Arduino: <https://github.com/h2zero/NimBLE-Arduino>
+- MAX31865 + PT1000 (tutorial DigiKey): <https://www.digikey.ca/fr/maker/tutorials/2021/getting-started-with-high-precision-temperature-sensing-using-a-max31865-and-pt1000> · Biblioteca: <https://github.com/adafruit/Adafruit_MAX31865>
+- Termómetros BLE soportados por Beanconqueror: <https://github.com/graphefruit/Beanconqueror/tree/develop/src/classes/devices>
+- Sensor "Decent Temp" en Decaid: <https://github.com/decentespresso/decaid/blob/main/lib/src/models/device/impl/decent_temp/temperature.dart>
+- Básculas abiertas de referencia: CaffePeso <https://www.home-barista.com/repairs/caffepeso-open-source-espresso-scale-t103525.html> · beeb/coffee-scale-app <https://github.com/beeb/coffee-scale-app>

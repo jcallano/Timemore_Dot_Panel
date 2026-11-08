@@ -4,3 +4,6 @@ build/
 *.elf
 *.map
 .vscode/
+
+# Contexto local de sesiones de trabajo (no se publica)
+CLAUDE.md
