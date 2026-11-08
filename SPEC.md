@@ -16,7 +16,7 @@ Panel de control físico, independiente y de código abierto para la báscula **
 1. Leer la Dot por BLE y mostrar el peso con la menor latencia posible.
 2. **Legibilidad sin gafas** (requisito principal de la interfaz): el peso, el tiempo y el ratio tienen la misma importancia y se muestran en grande, legibles a 60–100 cm por una persona con presbicia (ver 4.1).
 3. Guiar shots de espresso (dosis → ratio → objetivo), preparaciones de filtrado (bloom, etapas y ritmo de vertido) y el vaporizado de leche (temperatura objetivo).
-4. Medir la **temperatura del líquido** con una sonda PT1000 y unirla en una sola curva de peso, caudal y temperatura. Ningún proyecto abierto lo hace hoy (ver 4.7).
+4. Medir la **temperatura del líquido** con una sonda PT100 (sensor de platino) y unirla en una sola curva de peso, caudal y temperatura. Ningún proyecto abierto lo hace hoy (ver 4.7).
 5. Funcionar con batería y cargarse por USB-C.
 6. Integrarse opcionalmente con **Home Assistant** por WiFi (MQTT), sin afectar a la pantalla ni al BLE.
 7. **Hardware sin PCB a medida:** solo módulos estándar conectados con cables y bibliotecas de código abierto.
@@ -47,7 +47,7 @@ Panel de control físico, independiente y de código abierto para la báscula **
         │ ESP32-S3-DevKitC-1 N8R8            │ ─────────────► Home Assistant
         │ (coprocesador)                     │
         │ · núcleo 1: 2 encoders (PCNT),     │
-        │   MAX31865 + PT1000 (SPI),         │
+        │   MAX31865 + PT100 (SPI),          │
         │   zumbador (PWM), esclavo I2C      │
         │ · núcleo 0: WiFi + MQTT, ajustes   │
         │   e historial en su flash          │
@@ -64,13 +64,15 @@ Panel de control físico, independiente y de código abierto para la báscula **
 | # | Componente | Uso | Estado / coste aprox. |
 | :---: | :--- | :--- | :--- |
 | 1 | **Waveshare ESP32-S3-Touch-LCD-7**, versión **con táctil** (ESP32-S3-WROOM-1 **N16R8**, IPS 800×480, 345 cd/m², ángulo de 170°, táctil capacitivo GT911, expansor CH422G, cargador CS8501) | Interfaz, BLE con la Dot y carga de la batería | Por comprar (~40 USD + envío) |
-| 2 | **Espressif ESP32-S3-DevKitC-1** (ESP32-S3-WROOM-1 **N8R8**, revisión v1.1) | Coprocesador: encoders, PT1000, zumbador, WiFi/MQTT, almacenamiento | Disponible (la que había quedado libre) |
+| 2 | **Espressif ESP32-S3-DevKitC-1** (ESP32-S3-WROOM-1 **N8R8**, revisión v1.1) | Coprocesador: encoders, PT100, zumbador, WiFi/MQTT, almacenamiento | Disponible (la que había quedado libre) |
 | 3 | **2× encoder KY-040 / EC11** con pulsador, y perillas | "Ajustes" y "Acción" | En la caja |
 | 4 | **Módulo zumbador del kit Arduino** (serigrafía "5V"; pasivo o activo por identificar) | Avisos sonoros | En la caja |
-| 5 | **Módulo MAX31865 en versión PT1000** (resistencia de referencia de **4.3 kΩ**), configurado a **3 hilos** | Convertidor de la sonda | Por comprar (~5–8 USD) |
-| 6 | **Sonda PT1000 de 3 hilos**, vaina de acero inox de **3 mm**, 10–15 cm, cable de silicona o PTFE de 1–1.5 m | Temperatura del líquido (respuesta de ~1–3 s en agua) | Por comprar (~5–10 USD) |
+| 5 | **Módulo MAX31865 estándar** (resistencia de referencia de **430 Ω**, para PT100), configurado a **3 hilos** con sus puentes de soldadura | Convertidor de la sonda | Por comprar (~5–8 USD) |
+| 6 | **Sonda PT100 de 3 hilos, 2 × 100 mm** (vaina de acero inox 304/316 de 2 mm de diámetro y 100 mm de largo), cable de silicona o PTFE de 1–1.5 m | Temperatura del líquido. La vaina de 2 mm da la respuesta más rápida (~1–2 s en agua). Con 100 mm la unión con el cable queda fuera del líquido. | Por comprar (~5–10 USD) |
 | 7 | **Conector de quita y pon** para la sonda (jack de 3.5 mm de 3 polos o GX12) | Desconectarla para lavarla | ~1 USD |
-| 8 | **Batería 18650 Li-ion 2500 mAh** + portapilas y cable con conector **PH2.0** | Alimentación (conector de batería de la placa de 7") | Batería disponible; portapilas ~1 USD |
+| 8 | **Batería 18650 Li-ion 2500 mAh** en una **caja empotrable con tapa para 1 × 18650**, con cable al conector **PH2.0** de la placa de 7" | Alimentación; se cambia abriendo la tapa | Batería disponible; caja ~1.7 OMR |
+| 8b | **Segunda 18650 de repuesto** + **cargador externo** | Se carga fuera mientras la otra está en uso | Por comprar (cargador opcional si ya hay uno) |
+| 8c | **Placa de protección 1S** (DW01 + MOSFET, ≥ 3 A), si las celdas no traen protección propia | Protección contra cortocircuito y sobredescarga de la celda | ~0.5 USD |
 | 9 | **Interruptor deslizante** en la línea de la batería | Corte total para almacenamiento | ~0.10 USD |
 | 10 | **Cable I2C** (PH2.0 de 4 pines o dupont, según el conector de la placa) | Enlace entre la placa de 7" y el coprocesador | ~1 USD |
 | 11 | Caja impresa en **PETG** (Creality K1 Max) | Carcasa | Filamento |
@@ -111,8 +113,11 @@ Los encoders KY-040 y el MAX31865 se alimentan a **3.3 V** (pin 3V3 de la DevKit
 ### 2.4. Alimentación
 
 - **La batería se conecta a la placa de 7"** (conector PH2.0). Su chip **CS8501** carga a **580 mA** por el USB-C y eleva la tensión a 5 V para todo el sistema.
-- Waveshare **recomienda celdas de menos de 2000 mAh.** La 18650 de 2500 mAh carga igual, en más tiempo (~5 h). Se verificará en la fase 0 que no se calienta ni corta.
-- **Consumo estimado:** placa de 7" ~450 mA a 5 V (con la retroiluminación al máximo); coprocesador (DevKitC) ~40–50 mA sin WiFi y ~70–100 mA de media con WiFi (menos en modem-sleep). Desde la batería, ~650–750 mA → **~3–3.5 h de uso activo**.
+- **Batería intercambiable:** una 18650 va en una **caja empotrable con tapa** y la otra se carga en un **cargador externo**. El cambio se hace abriendo la tapa, en segundos, así que la autonomía práctica es ilimitada. El cargador de la placa (USB-C) sigue disponible para cargar la celda instalada.
+- **Al cambiar la batería, respetar la polaridad marcada en la caja (+/−):** una celda al revés puede dañar la placa. Usar celdas con protección propia o una placa de protección 1S.
+- **Se descartó poner dos celdas en paralelo** (5000 mAh): exigía celdas emparejadas, igualar sus tensiones y añadir una placa de protección, y la carga a 580 mA tardaba ~9–10 h. El cambio manual es más simple y seguro.
+- Waveshare **recomienda celdas de menos de 2000 mAh.** La 18650 de 2500 mAh carga igual con el cargador de la placa, en más tiempo (~5 h). Se verificará en la fase 0 que no se calienta ni corta.
+- **Consumo estimado:** placa de 7" ~450 mA a 5 V (con la retroiluminación al máximo); coprocesador (DevKitC) ~40–50 mA sin WiFi y ~70–100 mA de media con WiFi (menos en modem-sleep). Desde la batería, ~650–750 mA → **~3–3.5 h de uso activo por celda**.
 - **Ahorro:**
   - atenuar y apagar la pantalla por inactividad;
   - WiFi en ahorro de energía (el coprocesador envía a Home Assistant por lotes);
@@ -125,7 +130,7 @@ Los encoders KY-040 y el MAX31865 se alimentan a **3.3 V** (pin 3V3 de la DevKit
 
 - **Forma:** consola tipo **cuña**, con el frente inclinado ~20° para leerla de pie junto a la máquina.
 - **Medidas aproximadas:** la placa de 7" con cristal táctil mide **193 × 111 mm**. Con marco y encoders, el frente queda en **~240 × 125 mm** (encoders a la derecha) o **~205 × 160 mm** (encoders debajo). Se decide en la fase 6.
-- **Detrás de la pantalla:** el coprocesador (DevKitC, 69 × 25 mm), el MAX31865, la 18650 en su portapilas (con ventilación) y el interruptor.
+- **Detrás de la pantalla:** el coprocesador (DevKitC, 69 × 25 mm), el MAX31865, la caja empotrable de la 18650 (accesible desde fuera para cambiarla, con ventilación) y el interruptor.
 - **En el lateral:** el USB-C de la placa (carga y programación), el conector de la sonda y el interruptor, lejos de la bandeja de goteo.
 - **Material:** **PETG** en la **Creality K1 Max** (ABS como alternativa). No usar PLA: junto a la máquina hay calor y vapor, y el PLA se deforma a ~55 °C.
 - **Entregables:** fuentes editables (FreeCAD u OpenSCAD) y STL en el repo.
@@ -151,7 +156,7 @@ Los encoders KY-040 y el MAX31865 se alimentan a **3.3 V** (pin 3V3 de la DevKit
 | :--- | :--- | :--- |
 | Arduino-ESP32 3.x | LGPL-2.1 | Plataforma (la misma que la placa de 7"): WiFi, esclavo I2C (`Wire.begin(0x42)`, `onRequest`/`onReceive`, `slaveWrite`), FreeRTOS con dos núcleos |
 | [ESP32Encoder](https://github.com/madhephaestus/ESP32Encoder) | Abierta | Encoders por el periférico **PCNT** (contador de cuadratura por hardware, sin pérdida de pasos) |
-| [Adafruit MAX31865](https://github.com/adafruit/Adafruit_MAX31865) | Abierta (Adafruit) | Lectura de la PT1000 (Callendar–Van Dusen) |
+| [Adafruit MAX31865](https://github.com/adafruit/Adafruit_MAX31865) | Abierta (Adafruit) | Lectura de la PT100 (Callendar–Van Dusen) |
 | Cliente MQTT (PubSubClient o arduino-mqtt) + autodescubrimiento de Home Assistant (p. ej. [ArduinoHA](https://github.com/dawidchyrzynski/arduino-home-assistant)) | MIT / abiertas | Integración con Home Assistant |
 | NVS / LittleFS | — | Ajustes, recetas e historial en la flash del coprocesador |
 
@@ -188,7 +193,7 @@ Los encoders KY-040 y el MAX31865 se alimentan a **3.3 V** (pin 3V3 de la DevKit
   | `flags` | uint8 | Sonda conectada, WiFi conectado, MQTT conectado, error de la sonda |
   | `encA_delta`, `encB_delta` | int8 cada uno | Pasos acumulados desde la última lectura (no se pierden aunque la lectura se retrase) |
   | `buttons` | uint8 | Clic, doble clic y pulsación larga de cada encoder; se mantienen hasta leerlos |
-  | `temp_c_x100` | int16 | Temperatura de la PT1000 × 100 |
+  | `temp_c_x100` | int16 | Temperatura de la PT100 × 100 |
   | `temp_seq` | uint16 | Número de muestra (para saber si es nueva) |
   | `settings_rev` | uint16 | Cambia cuando hay ajustes nuevos desde Home Assistant |
 
@@ -337,9 +342,9 @@ Cada fase termina con un firmware que funciona, probado con la Dot real, y con u
 
 ### Fase 0 — Puesta en marcha del hardware
 - **Placa de 7":** ejemplo de Waveshare con LVGL; táctil; comprobar si el brillo es regulable; confirmar el punto de 5 V para el coprocesador y el GPIO del conector "Sensor AD".
-- **Coprocesador (DevKitC):** encoders por PCNT; MAX31865 + PT1000 (versión 4.3 kΩ, 3 hilos); zumbador (identificar si es pasivo o activo); esclavo I2C en 0x42 con el bloque de estado precargado, medido con el WiFi activo.
+- **Coprocesador (DevKitC):** encoders por PCNT; MAX31865 estándar (430 Ω) + PT100 a 3 hilos (puentes de soldadura configurados); zumbador (identificar si es pasivo o activo); esclavo I2C en 0x42 con el bloque de estado precargado, medido con el WiFi activo.
 - **Enlace:** la placa de 7" lee el estado del coprocesador por I2C y lo muestra.
-- **Energía:** 18650 en la placa; medir el consumo real y comprobar la carga de la celda de 2500 mAh.
+- **Energía:** 18650 en su caja empotrable; medir el consumo real, comprobar la carga de la celda de 2500 mAh con el cargador de la placa y el cambio de batería.
 - **Criterio de aceptación:**
   - la pantalla muestra un número de 25 mm legible sin gafas a 80 cm;
   - los 2 encoders se leen sin saltos ni rebotes a través del enlace I2C;
@@ -428,15 +433,15 @@ Todas se resuelven con pruebas físicas en la **fase 0**, salvo la 6.
 | Fecha | Decisión | Motivo |
 | :--- | :--- | :--- |
 | 2026-11-08 | **Pantalla principal: Waveshare ESP32-S3-Touch-LCD-7, con táctil** (7" IPS 800×480, ESP32-S3 N16R8) | Requisito de **leer sin gafas**: peso, tiempo y ratio con la misma importancia y dígitos de ~25 mm, más una gráfica amplia. Una sola pantalla grande; ESP32-S3 y cargador de batería integrados; sin PCB a medida. |
-| 2026-11-08 | **Coprocesador: ESP32-S3-DevKitC-1 N8R8** (la que ya estaba disponible) por I2C, como esclavo en 0x42, para encoders, PT1000, zumbador, WiFi/Home Assistant y almacenamiento | La pantalla RGB ocupa casi todos los GPIO de la S3 de la placa de 7". Los expansores I2C habituales chocan con las direcciones reservadas (0x20–0x27, 0x30–0x3F) y no dan SPI. La DevKitC tiene más de 30 GPIO, **PCNT** (encoders por hardware), dos núcleos, SPI y su propia radio: **el WiFi sale de la S3 de la pantalla**. Se monta sin soldar, ya está disponible y comparte ecosistema (Arduino-ESP32) con la placa de 7". El XIAO ESP32-S3 queda como alternativa compacta (requiere soldar los pads de detrás). El XIAO ESP32-C3 se descarta: 11 pines, sin PCNT y un solo núcleo. |
+| 2026-11-08 | **Coprocesador: ESP32-S3-DevKitC-1 N8R8** (la que ya estaba disponible) por I2C, como esclavo en 0x42, para encoders, PT100, zumbador, WiFi/Home Assistant y almacenamiento | La pantalla RGB ocupa casi todos los GPIO de la S3 de la placa de 7". Los expansores I2C habituales chocan con las direcciones reservadas (0x20–0x27, 0x30–0x3F) y no dan SPI. La DevKitC tiene más de 30 GPIO, **PCNT** (encoders por hardware), dos núcleos, SPI y su propia radio: **el WiFi sale de la S3 de la pantalla**. Se monta sin soldar, ya está disponible y comparte ecosistema (Arduino-ESP32) con la placa de 7". El XIAO ESP32-S3 queda como alternativa compacta (requiere soldar los pads de detrás). El XIAO ESP32-C3 se descarta: 11 pines, sin PCNT y un solo núcleo. |
 | 2026-11-08 | **Home Assistant por MQTT con autodescubrimiento**, desde el coprocesador | Integración estándar y local; aislada de la pantalla y del BLE. ESPHome no sirve porque no puede ser esclavo I2C. |
-| 2026-11-08 | **Temperatura con sonda PT1000 con cable + MAX31865** (versión PT1000, 3 hilos) | Barato (10–18 USD), preciso (±0.1–0.3 °C) y con vaina de 3 mm responde en ~1–3 s. El infrarrojo mide solo la superficie y lo falsea el vapor; la boya inalámbrica queda como fase 9. |
+| 2026-11-08 | **Temperatura con sonda PT100 de 3 hilos, 2 × 100 mm, con cable + MAX31865 estándar (430 Ω)** | Barato (10–18 USD) y preciso (±0.5 °C según el módulo; mejor tras calibrar). La vaina de 2 mm da la respuesta más rápida (~1–2 s) y los 100 mm dejan la unión con el cable fuera del líquido. El MAX31865 que se encuentra habitualmente trae la resistencia de 430 Ω (PT100); a 3 hilos compensa el cable, así que la PT100 rinde igual que una PT1000. El infrarrojo mide solo la superficie y lo falsea el vapor; la boya inalámbrica queda como fase 9. |
 | 2026-11-08 | **Publicar la temperatura en formatos que las apps ya entienden** ("Decent Temp" para Decaid; perfil compatible con Beanconqueror) | Devolver valor a la comunidad sin exigir cambios en esas apps. |
 | 2026-11-08 | **Interfaz con LVGL** (sustituye a U8g2 + LovyanGFX) | Con 800×480 y táctil, LVGL da fuentes grandes, gráficas y botones listos; es lo que usan los ejemplos oficiales de la placa. |
 | 2026-11-07 | **Dos encoders**: "Ajustes" y "Acción" (ahora conectados al coprocesador) | La tara y el timer quedan a un clic durante la extracción, sin navegar por menús, incluso con las manos mojadas. |
 | 2026-11-07 | **Zumbador: el módulo piezo del kit Arduino** (ahora en el coprocesador) | Ya está en la caja. |
 | 2026-11-07 | **Caja impresa en 3D** en la **Creality K1 Max**, en **PETG** | Impresora cerrada: PETG sin problemas (y ABS si hiciera falta). |
-| 2026-11-07 | **Batería 18650 de 2500 mAh** (ahora en el conector de batería de la placa de 7") | Batería universal y reemplazable. |
+| 2026-11-08 | **Batería 18650 de 2500 mAh intercambiable:** una en una caja empotrable con tapa para 1 × 18650 (conectada a la placa de 7") y otra de repuesto en un cargador externo | Autonomía práctica ilimitada cambiando la celda en segundos, sin los riesgos del paralelo (celdas emparejadas, igualar tensiones, carga de ~9–10 h). |
 
 **Decisiones sustituidas** (se conservan como historial):
 
@@ -446,6 +451,8 @@ Todas se resuelven con pruebas físicas en la **fase 0**, salvo la 6.
 | 2026-11-08 | Coprocesador Raspberry Pi Pico 2 W (PIO para los encoders, WiFi propio) | 2026-11-08 | El usuario ya tiene placas ESP32. La DevKitC N8R8 hace lo mismo (PCNT en lugar de PIO), sin comprar nada, sin soldar y en el mismo ecosistema que la placa de 7". |
 | 2026-11-07 | Cuatro pantallas: OLED 2.42" (peso), OLED 1.54" (tiempo y ratio), OLED 1.3" (modo), TFT 1.47" (curva) | 2026-11-08 | No cumplían el requisito de leer sin gafas: la 1.3", la 1.54" y la TFT de 1.47" dan textos de 2–6 mm, y tres datos principales en grande más una gráfica no cabían. |
 | 2026-11-07 | TP4056 + Schottky + divisor para la batería | 2026-11-08 | La placa de 7" integra el cargador (CS8501) y el elevador a 5 V. |
+| 2026-11-08 | Sonda PT1000 + MAX31865 en versión PT1000 (4.3 kΩ) | 2026-11-08 | El módulo MAX31865 disponible trae la resistencia de 430 Ω (PT100). La PT100 a 3 hilos rinde igual y evita cambiar resistencias SMD o buscar un módulo especial. |
+| 2026-11-08 | Dos 18650 en paralelo (5000 mAh) | 2026-11-08 | Se prefirió una celda intercambiable con repuesto: más simple y seguro. |
 
 ---
 
@@ -458,10 +465,10 @@ Todas se resuelven con pruebas físicas en la **fase 0**, salvo la 6.
 | Pérdida de pasos de los encoders | Conteo por hardware (PCNT) en el coprocesador; pasos acumulados hasta que la placa de 7" los lee. |
 | Respuesta lenta del esclavo I2C del ESP32 mientras el WiFi está activo | Bloque de estado precargado con `slaveWrite`; la tarea de tiempo real en el núcleo 1 y el WiFi en el 0. Se mide en la fase 0. |
 | Corriente insuficiente para el coprocesador desde la placa | Alimentarlo desde 5 V (punto a confirmar en la fase 0). La DevKitC consume algo más que un Pico (LED de encendido y chip USB-serie). |
-| Autonomía corta (~3–3.5 h activas) | Atenuado, apagado y reposo profundo; envíos a Home Assistant por lotes. |
+| Autonomía corta (~3–3.5 h activas por celda) | Batería intercambiable con repuesto cargado; atenuado, apagado y reposo profundo; envíos a Home Assistant por lotes. |
 | La celda de 2500 mAh excede la recomendación de Waveshare (< 2000 mAh) | Verificar la carga en la fase 0; si da problemas, usar una celda de ≤ 2000 mAh. |
 | La Dot solo acepta una conexión | Opción de liberar la báscula; la fase 8 lo resuelve integrando el puente. |
-| Módulo MAX31865 con la resistencia de PT100 (430 Ω) en lugar de la de PT1000 (4.3 kΩ) | Comprar la versión PT1000 o cambiar la resistencia; se verifica en la fase 0. |
+| Comprar una sonda PT1000 para un MAX31865 de 430 Ω (o al revés) | Sonda **PT100** de 3 hilos con el MAX31865 estándar (430 Ω); verificar ambos al recibirlos (fase 0). |
 | Higiene de la sonda en contacto con alimentos | Vaina de acero inox 316, conector de quita y pon para lavarla, cable de silicona apto para alimentos. |
 | El calor y el vapor de la máquina deforman la caja | PETG o ABS; ubicarla lejos de la salida de vapor. |
 | Batería de litio junto a una fuente de calor | Portapilas ventilado, cargador con protección y nunca encima de la máquina. |
@@ -477,7 +484,7 @@ Todas se resuelven con pruebas físicas en la **fase 0**, salvo la 6.
 - Driver de la Dot en Beanconqueror: <https://github.com/graphefruit/Beanconqueror/blob/develop/src/classes/devices/timemoreDotScale.ts>
 - Puente BLE (origen del driver reutilizado): <https://github.com/jcallano/BLE-_Scale_Translator_Bridge__Wendougee_E-Bar>
 - LVGL: <https://lvgl.io/> · ESP32_Display_Panel: <https://github.com/esp-arduino-libs/ESP32_Display_Panel> · NimBLE-Arduino: <https://github.com/h2zero/NimBLE-Arduino>
-- MAX31865 + PT1000 (tutorial DigiKey): <https://www.digikey.ca/fr/maker/tutorials/2021/getting-started-with-high-precision-temperature-sensing-using-a-max31865-and-pt1000> · Biblioteca: <https://github.com/adafruit/Adafruit_MAX31865>
+- MAX31865 + PT1000/PT100 (tutorial DigiKey): <https://www.digikey.ca/fr/maker/tutorials/2021/getting-started-with-high-precision-temperature-sensing-using-a-max31865-and-pt1000> · Biblioteca: <https://github.com/adafruit/Adafruit_MAX31865>
 - Home Assistant, MQTT Discovery: <https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery> · ArduinoHA: <https://github.com/dawidchyrzynski/arduino-home-assistant>
 - Termómetros BLE soportados por Beanconqueror: <https://github.com/graphefruit/Beanconqueror/tree/develop/src/classes/devices>
 - Sensor "Decent Temp" en Decaid: <https://github.com/decentespresso/decaid/blob/main/lib/src/models/device/impl/decent_temp/temperature.dart>
