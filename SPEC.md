@@ -158,9 +158,10 @@ Los encoders KY-040 y el MAX31865 se alimentan a **3.3 V** (pin 3V3 de la DevKit
 
 | Biblioteca | Licencia | Uso |
 | :--- | :--- | :--- |
-| Arduino-ESP32 3.x | LGPL-2.1 | Plataforma (opciones: Flash 16 MB, **PSRAM OPI 8 MB**, tabla de particiones grande si la interfaz lo pide). La wiki de la 7B usa el paquete de placas "esp32-XIP-3.1.1": validar en la fase 0 si basta con el core 3.3.x instalado. |
-| [ESP32_Display_Panel](https://github.com/esp-arduino-libs/ESP32_Display_Panel) + [ESP32_IO_Expander](https://github.com/esp-arduino-libs/ESP32_IO_Expander) | Apache-2.0 | Driver de la pantalla RGB, el táctil y el expansor de E/S (brillo, batería) |
-| [LVGL](https://lvgl.io/) 8.4 | MIT | Interfaz: fuentes grandes, gráficas (`lv_chart`), botones |
+| Arduino-ESP32 3.x | LGPL-2.1 | Plataforma. **Validada el 2026-11-22 con el core 3.3.12** (no hace falta el paquete "esp32-XIP-3.1.1" de la wiki): `esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,PartitionScheme=app3M_fat9M_16MB,CDCOnBoot=default,UploadSpeed=230400` |
+| Drivers del ejemplo oficial de Waveshare (`rgb_lcd_port`, `gt911`, `io_extension`, `lvgl_port`) | Waveshare | Pantalla RGB, táctil GT911 y expansor de E/S (brillo y batería). ESP32_Display_Panel 1.0.4 no trae definición para la 7B, así que se usan los drivers autocontenidos de los ejemplos, con los cambios de rendimiento de la sección 3.5 |
+| [LVGL](https://lvgl.io/) 8.4 | MIT | Interfaz: fuentes grandes, botones y gráfica (en un `lv_canvas` propio, no `lv_chart`: ver 3.5) |
+| Fuente [Bebas Neue](https://fonts.google.com/specimen/Bebas+Neue), convertida con [lv_font_conv](https://github.com/lvgl/lv_font_conv) | OFL 1.1 / MIT | Números grandes: es condensada y tiene dígitos de ancho fijo. Tamaños de 320, 200, 96 y 56 px |
 | [NimBLE-Arduino](https://github.com/h2zero/NimBLE-Arduino) 2.x | Apache-2.0 | Cliente BLE de la Dot (y periférico en las fases 7 y 8) |
 
 **Coprocesador (ESP32-S3-DevKitC-1):**
@@ -226,12 +227,33 @@ Validado en hardware el 2026-11-07. Se basa en las tramas de de1app, [PR #345](h
 - Bonding Just-Works, MAC guardada y reconexión automática.
 - Caudal: EMA calculado con la hora real de llegada de cada muestra.
 
-### 3.5. Estabilidad de la pantalla RGB (medidas preventivas)
+### 3.5. Estabilidad y rendimiento de la pantalla RGB
 
+**Medidas preventivas:**
 - **Bounce buffers** en la RAM interna para el refresco RGB, evitando que el acceso a la PSRAM desplace la imagen.
 - **Sin WiFi en la S3** (lo hace el coprocesador).
 - **Sin escrituras en la flash de la S3 durante el uso:** los ajustes viven en el coprocesador.
-- Los búferes de dibujo de LVGL, en la RAM interna cuando sea posible.
+
+**Configuración validada en hardware el 2026-11-22** (prueba `firmware/ui_test_01`, de la v0.1 a la v0.6; el detalle está en su README):
+
+| Aspecto | Configuración | Por qué |
+| :--- | :--- | :--- |
+| Dibujo de LVGL | **Buffer de 1024 × 30 px en SRAM interna** (60 KB) y **un solo framebuffer** en PSRAM, sin el "modo antiparpadeo 3" del ejemplo de Waveshare | Dibujar directamente en la PSRAM iba a ~1,5 Mpx/s, porque compite con la lectura del bounce buffer (60 MB/s a 30 MHz): 75–120 ms por refresco. Dibujando en SRAM baja a ~30 ms, sin parpadeo ni tearing visibles |
+| Interrupción del bounce buffer | En el **núcleo 1**, donde la deja el ejemplo | En el núcleo 0 producía **mucho parpadeo** |
+| Números principales | **Por dígitos:** una celda por carácter; solo se redibuja la que cambia | Un número entero son ~52.000 px; un dígito, ~11.500 |
+| Gráfica | `lv_canvas` propio, de **tamaño fijo**, que dibuja solo el segmento nuevo | `lv_chart` se redibuja entero en cada punto. Sin tamaño fijo, el canvas crecía con sus hijos y `lv_img` repetía la imagen en mosaico: aparecía una gráfica fantasma |
+| Avisos por color | **Marco** de 14 px en lugar del fondo completo | Repintar los 614.400 px de la pantalla costaba 200–250 ms |
+| Secundarios (caudal, temperatura) | Se actualizan a ~3 Hz | A 10 Hz el ruido los hace ilegibles y cuestan redibujos |
+| Temporización | Refresco de LVGL cada 15 ms y espera mínima de su tarea de 5 ms | Menos espera entre que llega el dato y se dibuja |
+
+**Resultado medido:**
+- ~30 ms por refresco;
+- CPU de LVGL al 25–40 %;
+- **latencia del peso (dato nuevo → framebuffer) de ~30 ms**, más 0–30 ms hasta que el panel lo muestra;
+- 10 actualizaciones por segundo sin perder ninguna;
+- memoria libre: **92 KB de RAM interna** (para el BLE de la fase 1) y 6,4 MB de PSRAM.
+
+**Herramienta:** el firmware vuelca el framebuffer por el puerto serie (comandos `d`/`D`) y [`tools/fbdump.ps1`](tools/fbdump.ps1) lo convierte a PNG. Sirve para distinguir los fallos de dibujo de los del panel.
 
 ---
 
@@ -248,10 +270,17 @@ El usuario tiene presbicia y debe poder leer la información **sin gafas a 60–
 | Texto mínimo (ejes, menús, etiquetas) | **≥ 5 mm** |
 | Contraste | Fondo negro; colores saturados. Nada de gris sobre negro. |
 | Colores de las curvas | Peso: blanco · Caudal: cian · Temperatura: naranja. Trazos de ≥ 3 px. |
-| Señales que no exigen leer | Pitido al llegar al objetivo; **color de fondo** (ámbar: acercándose; verde: objetivo; rojo: pasado); barras de progreso gruesas |
+| Señales que no exigen leer | Pitido al llegar al objetivo; **marco de color** de 14 px alrededor de la pantalla (ámbar: acercándose; verde: objetivo; rojo: pasado), que sustituye al color de fondo por rendimiento (ver 3.5); barras de progreso gruesas |
 | Menús | 3–4 opciones por pantalla, botones táctiles grandes (≥ 15 mm) |
 
 En la pantalla de 7" de la 7B (~154 × 86 mm de área útil, 1024×600, ~0.15 mm por píxel), 25 mm equivalen a ~166 px de alto de dígito.
+
+**Validado el 2026-11-22** con `firmware/ui_test_01`, en la que el usuario lo lee todo bien sin gafas.
+- Con una fuente normal, **los tres números a 25 mm no caben en una fila**: harían falta ~1.900 px de ancho.
+- La fuente condensada **Bebas Neue** lo resuelve:
+  - a 200 px da dígitos de 140 px (**~21 mm**) y 80 px de ancho, así que los tres números caben en una fila (layout A);
+  - a 320 px, dígitos de 224 px (**~34 mm**), para el layout B con el peso dominante.
+- Secundarios a 96 px (dígitos de 67 px, ~10 mm). Rótulos y botones a 56 px (~6 mm).
 
 ### 4.2. Distribución de la pantalla
 
@@ -355,6 +384,19 @@ Cada fase termina con un firmware que funciona, probado con la Dot real, y con u
 
 ### Fase 0 — Puesta en marcha del hardware
 - **Placa de 7" (7B):** ejemplo de Waveshare con LVGL; táctil; regulación del brillo y lectura de la batería por el expansor; medir la corriente que da la salida de 5 V con la DevKitC conectada; identificar el GPIO del conector de sensor; confirmar que el conector de batería es PH2.0 (o HY2.0) y su polaridad.
+  - **Avance del 2026-11-22:**
+    - ✅ Hecho con `firmware/ui_test_01` v0.6:
+      - ejemplo oficial flasheado (COM16, chip CH343, interruptor en UART1, subida a 230400);
+      - pantalla, táctil y botones funcionando;
+      - números legibles sin gafas;
+      - rendimiento optimizado (ver 3.5);
+      - regulación del brillo por el expansor (`BR -` y `BR +`) comprobada.
+    - El ADC de la batería lee 4,3–4,5 V con el USB conectado y sin batería.
+    - ⏳ Pendiente:
+      - la lectura del ADC con una 18650;
+      - la salida de 5 V;
+      - el conector de sensor;
+      - la polaridad del conector de batería.
 - **Coprocesador (DevKitC):** encoders por PCNT; MAX31865 estándar (430 Ω) + PT100 a 3 hilos (puentes de soldadura configurados); zumbador (identificar si es pasivo o activo); esclavo I2C en 0x42 con el bloque de estado precargado, medido con el WiFi activo.
 - **Enlace:** la placa de 7" lee el estado del coprocesador por I2C y lo muestra.
 - **Energía:** 18650 en su caja empotrable; medir el consumo real, comprobar la carga de la celda de 2500 mAh con el cargador de la placa y el cambio de batería.
@@ -449,6 +491,8 @@ Todas se resuelven con pruebas físicas en la **fase 0**, salvo la 5.
 | 2026-11-08 | **Home Assistant por MQTT con autodescubrimiento**, desde el coprocesador | Integración estándar y local; aislada de la pantalla y del BLE. ESPHome no sirve porque no puede ser esclavo I2C. |
 | 2026-11-08 | **Temperatura con sonda PT100 de 3 hilos, 2 × 100 mm, con cable + MAX31865 estándar (430 Ω)** | Barato (10–18 USD) y preciso (±0.5 °C según el módulo; mejor tras calibrar). La vaina de 2 mm da la respuesta más rápida (~1–2 s) y los 100 mm dejan la unión con el cable fuera del líquido. El MAX31865 que se encuentra habitualmente trae la resistencia de 430 Ω (PT100); a 3 hilos compensa el cable, así que la PT100 rinde igual que una PT1000. El infrarrojo mide solo la superficie y lo falsea el vapor; la boya inalámbrica queda como fase 9. |
 | 2026-11-08 | **Publicar la temperatura en formatos que las apps ya entienden** ("Decent Temp" para Decaid; perfil compatible con Beanconqueror) | Devolver valor a la comunidad sin exigir cambios en esas apps. |
+| 2026-11-22 | **Dibujo de LVGL en SRAM interna** (buffer de 1024 × 30 px y un solo framebuffer), en vez del modo antiparpadeo 3 de Waveshare | Medido en `ui_test_01`: dibujar en la PSRAM costaba 75–120 ms por refresco; en SRAM, ~30 ms, sin parpadeo ni tearing visibles. Crear el panel en el núcleo 0 se probó y se descartó porque producía mucho parpadeo. |
+| 2026-11-22 | **Números grandes con Bebas Neue** (OFL), dibujados **dígito a dígito**; **avisos con un marco de color** en vez del fondo completo; **gráfica en un `lv_canvas` propio** | Con Bebas Neue, los tres números caben en una fila a ~21 mm (o el peso a ~34 mm en el layout B) y el usuario los lee sin gafas. Dibujar por dígitos, el marco y el canvas incremental reducen los píxeles por refresco de 150.000 a ~60.000, y la latencia del peso queda en ~30 ms. |
 | 2026-11-08 | **Interfaz con LVGL** (sustituye a U8g2 + LovyanGFX) | Con 1024×600 y táctil, LVGL da fuentes grandes, gráficas y botones listos; es lo que usan los ejemplos oficiales de la placa. |
 | 2026-11-08 | **Conector GX16 de 3 pines** para la sonda, **interruptor basculante** de ≥ 3 A y **kit de cables PH2.0** | GX16: robusto y con buenos contactos (en una PT100 unas décimas de ohmio ya se notan). Basculante: los deslizantes pequeños solo aguantan 0.5 A. PH2.0: el conector de batería, I2C, 5 V y sensor de la placa. |
 | 2026-11-08 | **Insertos roscados de latón** en la caja impresa, colocados con el **soldador Aneng SL108** con punta para insertos | Roscas metálicas que aguantan abrir la caja muchas veces (para cambiar la batería o hacer ajustes). |
@@ -467,6 +511,8 @@ Todas se resuelven con pruebas físicas en la **fase 0**, salvo la 5.
 | 2026-11-07 | TP4056 + Schottky + divisor para la batería | 2026-11-08 | La placa de 7" integra el cargador (CS8501) y el elevador a 5 V. |
 | 2026-11-08 | Sonda PT1000 + MAX31865 en versión PT1000 (4.3 kΩ) | 2026-11-08 | El módulo MAX31865 disponible trae la resistencia de 430 Ω (PT100). La PT100 a 3 hilos rinde igual y evita cambiar resistencias SMD o buscar un módulo especial. |
 | 2026-11-08 | Dos 18650 en paralelo (5000 mAh) | 2026-11-08 | Se prefirió una celda intercambiable con repuesto: más simple y seguro. |
+| 2026-11-08 | Avisos por **color de fondo** de toda la pantalla | 2026-11-22 | Repintar la pantalla completa cuesta 200–250 ms y retrasa el peso justo cuando más importa (al acercarse al objetivo). Se sustituye por un marco de 14 px. |
+| 2026-11-08 | Gráfica con `lv_chart` | 2026-11-22 | Se redibuja entera en cada punto. Se sustituye por un `lv_canvas` que dibuja solo el segmento nuevo. |
 | 2026-11-08 | Placa Waveshare ESP32-S3-Touch-LCD-7 (sin "B", 800×480), de un revendedor | 2026-11-08 | Se compró la **7B** en la tienda oficial: más resolución, brillo regulable, medición de batería, salida de 5 V para el coprocesador, menos direcciones I2C ocupadas y menos consumo. |
 
 ---
