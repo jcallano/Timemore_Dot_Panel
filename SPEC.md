@@ -103,21 +103,66 @@ Panel de control físico, independiente y de código abierto para la báscula **
 | Ocupados por el táctil | — | 4 (IRQ), 8, 9 | El I2C es compartido |
 | RS485 (15/16), CAN (19/20, compartido con el USB), tarjeta SD (11/12/13) | PH2.0 / ranura | — | Sin usar |
 
-**Coprocesador ESP32-S3-DevKitC-1 N8R8 v1.1 (asignación propuesta; se confirma en la fase 0):**
+**Coprocesador ESP32-S3-DevKitC-1 N8R8 v1.1: tabla de conexiones** (2026-11-22; la usa `firmware/copro_test_01`)
 
-| Función | Señal | GPIO | Notas |
-| :--- | :--- | :---: | :--- |
-| **I2C esclavo** (hacia la placa de 7") | SDA / SCL | **8 / 9** | Dirección 0x42 |
-| **Encoder "Ajustes"** | CLK / DT / SW | **4 / 5 / 6** | Contado por hardware (PCNT) |
-| **Encoder "Acción"** | CLK / DT / SW | **15 / 16 / 7** | Contado por hardware (PCNT) |
-| **MAX31865** (SPI) | SCK / MOSI / MISO / CS | **12 / 11 / 13 / 10** | SPI modo 1 |
-| **Zumbador** | PWM (LEDC) | **2** | |
-| Línea "datos listos" (opcional) | Salida | **14** → conector de sensor de la placa de 7" | |
-| Alimentación | 5V / GND | — | Desde la **salida de 5 V (PH2.0)** de la placa de 7"; GND común |
-| **Evitar** | — | 0, 3, 45, 46 (strapping); 19, 20 (USB); 35–37 (PSRAM); 38 (LED RGB); 43, 44 (consola) | |
-| Libres | — | 1, 17, 18, 21, 39–42, 47, 48 | |
+Posiciones en las tiras de pines, con la placa mirada con los USB abajo y contando desde arriba (pin 1): **J1** es la tira izquierda y **J3** la derecha. Se tomaron del pinout oficial: **comprobarlas con la serigrafía** antes de conectar. Todo va con cables dupont, sin soldar.
 
-Los encoders KY-040 y el MAX31865 se alimentan a **3.3 V** (pin 3V3 de la DevKitC). Todo se conecta con cables dupont a las cabeceras, sin soldar.
+*1. Encoders KY-040* (contados por hardware con el **PCNT**; los pulsadores SW, **por interrupción**):
+
+| Módulo | Pin | → DevKitC | Posición |
+| :--- | :--- | :--- | :--- |
+| **Encoder "Ajustes"** | CLK / DT / SW | **GPIO 4 / 5 / 6** | J1-4 / J1-5 / J1-6 |
+| | + / GND | **3V3** / GND | raíl 3V3 / raíl GND |
+| **Encoder "Acción"** | CLK / DT / SW | **GPIO 15 / 16 / 7** | J1-8 / J1-9 / J1-7 |
+| | + / GND | **3V3** / GND | raíl 3V3 / raíl GND |
+
+Las seis señales quedan seguidas en J1 (pines 4 a 9). El `+` va a **3V3, nunca a 5V**: las resistencias pull-up del módulo pondrían 5 V en los GPIO.
+
+*2. MAX31865 (SPI, modo 1) + PT100 a 3 hilos:*
+
+| MAX31865 | → DevKitC | Posición |
+| :--- | :--- | :--- |
+| CS / SDI (MOSI) / CLK / SDO (MISO) | **GPIO 10 / 11 / 12 / 13** | J1-16 / J1-17 / J1-18 / J1-19 |
+| VIN / GND | **3V3** / GND | raíl 3V3 / raíl GND |
+| 3Vo, RDY | sin conectar | — |
+
+Los 3 hilos de la PT100 llegan a los bornes del MAX31865 a través del GX16. Qué hilo va a cada borne y qué puentes de 3 hilos hay que soldar **se confirma con una foto del módulo**, porque los clones cambian la serigrafía.
+
+*3. Zumbador:*
+
+| Módulo | → DevKitC | Posición |
+| :--- | :--- | :--- |
+| S (señal) / + / − | **GPIO 2** / **3V3** / GND | J3-5 / raíl 3V3 / raíl GND |
+
+Si el módulo lleva transistor (PNP tipo S8550), alimentarlo a **3V3**: a 5 V no llega a apagarse con la lógica de 3,3 V.
+
+*4. Enlace con la placa de 7"* (fase 0, pasos 2 y 3):
+
+| DevKitC | Posición | → Placa 7B |
+| :--- | :--- | :--- |
+| **GPIO 8** (SDA) / **GPIO 9** (SCL) / GND | J1-12 / J1-15 / J1-22 | Conector PH2.0 I2C: SDA / SCL / GND. Esclavo en **0x42** |
+| **5V** | J1-21 | Salida PH2.0 de **5 V** de la 7B |
+| GPIO 14 ("datos listos", opcional) | J1-20 | Conector de sensor de la 7B (por confirmar) |
+
+- **No conectar el pin 3V3 del conector I2C de la 7B:** cada placa usa su propio regulador.
+- No conectar a la vez el **USB de la DevKitC** y el **5 V de la 7B** hasta comprobarlo en el paso 3.
+
+*5. Alimentación:*
+- La DevKitC tiene solo **2 pines 3V3** (J1-1, J1-2) y **4 GND** (J1-22, J3-1, J3-21, J3-22).
+- Se usa una **mini protoboard** con un **raíl 3V3**, que sale de J1-1 y alimenta los encoders, el MAX31865 y el zumbador, y un **raíl GND**, desde J1-22.
+- Consumo en 3V3: < 15 mA, frente a los 500 mA que da el regulador.
+
+*Pines que no se deben usar:*
+
+| GPIO | Motivo |
+| :--- | :--- |
+| 0, 3, 45, 46 | Strapping (arranque) |
+| 19, 20 | USB nativo (consola y programación) |
+| 35, 36, 37 | PSRAM octal (N8R8) |
+| 38 | LED RGB de la placa |
+| 43, 44 | Consola UART |
+
+**Libres:** 1, 17, 18, 21, 39–42, 47 y 48.
 
 ### 2.4. Alimentación
 
@@ -493,6 +538,7 @@ Todas se resuelven con pruebas físicas en la **fase 0**, salvo la 5.
 | 2026-11-08 | **Publicar la temperatura en formatos que las apps ya entienden** ("Decent Temp" para Decaid; perfil compatible con Beanconqueror) | Devolver valor a la comunidad sin exigir cambios en esas apps. |
 | 2026-11-22 | **Dibujo de LVGL en SRAM interna** (buffer de 1024 × 30 px y un solo framebuffer), en vez del modo antiparpadeo 3 de Waveshare | Medido en `ui_test_01`: dibujar en la PSRAM costaba 75–120 ms por refresco; en SRAM, ~30 ms, sin parpadeo ni tearing visibles. Crear el panel en el núcleo 0 se probó y se descartó porque producía mucho parpadeo. |
 | 2026-11-22 | **Números grandes con Bebas Neue** (OFL), dibujados **dígito a dígito**; **avisos con un marco de color** en vez del fondo completo; **gráfica en un `lv_canvas` propio** | Con Bebas Neue, los tres números caben en una fila a ~21 mm (o el peso a ~34 mm en el layout B) y el usuario los lee sin gafas. Dibujar por dígitos, el marco y el canvas incremental reducen los píxeles por refresco de 150.000 a ~60.000, y la latencia del peso queda en ~30 ms. |
+| 2026-11-22 | **Se confirma el coprocesador** (se valoró hacerlo todo con la placa de 7" y se descarta) | La CPU de la 7B aguantaría la PT100 y los mandos, pero solo deja libres el I2C y el GPIO 6: el MAX31865 (SPI) obligaría a un apaño con la ranura microSD o a cambiar a termopar. Además, el WiFi para Home Assistant no cabe con holgura junto al BLE en los 92 KB de RAM interna libres. El usuario quiere un panel completo y único para los amantes del café, con Home Assistant incluido. |
 | 2026-11-08 | **Interfaz con LVGL** (sustituye a U8g2 + LovyanGFX) | Con 1024×600 y táctil, LVGL da fuentes grandes, gráficas y botones listos; es lo que usan los ejemplos oficiales de la placa. |
 | 2026-11-08 | **Conector GX16 de 3 pines** para la sonda, **interruptor basculante** de ≥ 3 A y **kit de cables PH2.0** | GX16: robusto y con buenos contactos (en una PT100 unas décimas de ohmio ya se notan). Basculante: los deslizantes pequeños solo aguantan 0.5 A. PH2.0: el conector de batería, I2C, 5 V y sensor de la placa. |
 | 2026-11-08 | **Insertos roscados de latón** en la caja impresa, colocados con el **soldador Aneng SL108** con punta para insertos | Roscas metálicas que aguantan abrir la caja muchas veces (para cambiar la batería o hacer ajustes). |
