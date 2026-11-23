@@ -72,7 +72,7 @@ El resumen no incluye el contenido ATT. El registro completo de Samsung no se pu
 | Sin secuencia de inicio | `DOT_SEND_INIT_SEQUENCE = false` |
 | Sondeo ligero cada 25 s | `TIMEMORE_KEEPALIVE_INTERVAL_MS 25000`, `DOT_LIGHT_KEEPALIVE = true` |
 | Tara solo por software | `DOT_HW_TARE = false` en `executeTimemoreTare()` |
-| Redibujado al llegar cada muestra | `bridge_set_sample_hook()` (aviso desde `bridge_tx`) → `lvgl_port_wake()` → `on_sample_wake()` en la tarea de LVGL, que procesa la muestra y llama a `lv_refr_now()` |
+| Muestra procesada al llegar | `bridge_set_sample_hook()` (aviso desde `bridge_tx`) → `lvgl_port_wake()` → `on_sample_wake()` en la tarea de LVGL. El refresco **no** se fuerza: `lv_refr_now()` producía rayas en el panel (ver SPEC 3.5) |
 
 La línea `[LINK]` del puerto serie muestra `mtu=247` y `tramas juntadas N/M`. Que N crezca de vez en cuando es buena
 señal: es la Dot vaciando la cola.

@@ -48,7 +48,18 @@
 #elif CONFIG_EXAMPLE_LVGL_PORT_BUF_INTERNAL
 #define LVGL_PORT_BUFFER_MALLOC_CAPS    (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
 #endif
+// PANEL: copia en paralelo (1): dos buferes de 20 lineas (2 x 40 KB internos);
+// LVGL dibuja una franja en el nucleo 1 mientras la tarea lv_flush copia la
+// anterior al framebuffer en el nucleo 0. Bajaba el refresco de ~22 a ~17 ms,
+// pero PRODUCE PARPADEO al cambiar el peso (2026-11-23): dos nucleos accediendo a
+// la PSRAM a la vez dejan sin datos al bounce buffer del panel RGB. DESACTIVADA:
+// un solo bufer de 30 lineas y copia en serie.
+#define LVGL_PORT_PARALLEL_FLUSH        (0)
+#if LVGL_PORT_PARALLEL_FLUSH
+#define LVGL_PORT_BUFFER_HEIGHT         (20)
+#else
 #define LVGL_PORT_BUFFER_HEIGHT         (30)   // 1024 x 30 x 2 B = 60 KB internos
+#endif
 
 /**
  * Avoid tering related configurations, can be adjusted by users.

@@ -370,20 +370,49 @@ void flush_callback(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color
 
 #else
 
+// PANEL: copia en paralelo. Con dos buferes de dibujo, cada franja que LVGL
+// termina se entrega a una tarea de copia en el NUCLEO 0 (prioridad baja, por
+// debajo del BLE y del puente), que la escribe en el framebuffer (PSRAM) y avisa
+// con lv_disp_flush_ready(). Mientras, LVGL dibuja la franja siguiente en el
+// nucleo 1. El refresco pasa de dibujo + copia a ~max(dibujo, copia).
+struct FlushJob { lv_disp_drv_t *drv; lv_area_t area; lv_color_t *map; };
+static QueueHandle_t s_flush_q = NULL;
+static SemaphoreHandle_t s_flush_done = NULL;
+
+static void flush_copy(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_map)
+{
+    esp_lcd_panel_handle_t panel_handle = (esp_lcd_panel_handle_t) drv->user_data;
+    int64_t _b0 = esp_timer_get_time();
+    esp_lcd_panel_draw_bitmap(panel_handle, area->x1, area->y1, area->x2 + 1, area->y2 + 1, color_map);
+    g_bmp_us_sum += (uint32_t)(esp_timer_get_time() - _b0);
+    lv_disp_flush_ready(drv);
+}
+
+static void flush_task(void *)
+{
+    FlushJob j;
+    while (1) {
+        if (xQueueReceive(s_flush_q, &j, portMAX_DELAY) == pdTRUE) {
+            flush_copy(j.drv, &j.area, j.map);
+            xSemaphoreGive(s_flush_done);
+        }
+    }
+}
+
+// LVGL espera aqui (nucleo 1) cuando necesita un bufer que aun se esta copiando
+static void flush_wait_cb(lv_disp_drv_t *drv)
+{
+    xSemaphoreTake(s_flush_done, pdMS_TO_TICKS(2));
+}
+
 void flush_callback(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_map)
 {
-    esp_lcd_panel_handle_t panel_handle = (esp_lcd_panel_handle_t) drv->user_data; // Get the panel handle from driver user data
-    const int offsetx1 = area->x1; // Start X coordinate of the area to flush
-    const int offsetx2 = area->x2; // End X coordinate of the area to flush
-    const int offsety1 = area->y1; // Start Y coordinate of the area to flush
-    const int offsety2 = area->y2; // End Y coordinate of the area to flush
-
-    /* Just copy data from the color map to the RGB frame buffer */
-    int64_t _b0 = esp_timer_get_time();
-    esp_lcd_panel_draw_bitmap(panel_handle, offsetx1, offsety1, offsetx2 + 1, offsety2 + 1, color_map);
-    g_bmp_us_sum += (uint32_t)(esp_timer_get_time() - _b0);
-
-    lv_disp_flush_ready(drv); // Mark the display flush as complete
+    if (s_flush_q) {
+        FlushJob j = { drv, *area, color_map };
+        xQueueSend(s_flush_q, &j, portMAX_DELAY);
+    } else {
+        flush_copy(drv, area, color_map);   // un solo bufer: copia en el sitio
+    }
 }
 
 #endif /* LVGL_PORT_AVOID_TEAR_ENABLE */
@@ -422,6 +451,15 @@ static lv_disp_t *display_init(esp_lcd_panel_handle_t panel_handle)
     buffer_size = LVGL_PORT_H_RES * LVGL_PORT_BUFFER_HEIGHT; // Calculate buffer size
     buf1 = heap_caps_malloc(buffer_size * sizeof(lv_color_t), LVGL_PORT_BUFFER_MALLOC_CAPS); // Allocate memory
     assert(buf1); // Ensure allocation succeeded
+#if LVGL_PORT_PARALLEL_FLUSH
+    // PANEL: segundo bufer + tarea de copia en el nucleo 0 (ver flush_task)
+    buf2 = heap_caps_malloc(buffer_size * sizeof(lv_color_t), LVGL_PORT_BUFFER_MALLOC_CAPS);
+    if (buf2) {
+        s_flush_q = xQueueCreate(1, sizeof(FlushJob));
+        s_flush_done = xSemaphoreCreateBinary();
+        xTaskCreatePinnedToCore(flush_task, "lv_flush", 3072, NULL, 2, NULL, 0);
+    }
+#endif
     ESP_LOGI(TAG, "LVGL buffer size: %dKB", buffer_size * sizeof(lv_color_t) / 1024); // Log buffer size
 #endif /* LVGL_PORT_AVOID_TEAR_ENABLE */
 
@@ -438,6 +476,9 @@ static lv_disp_t *display_init(esp_lcd_panel_handle_t panel_handle)
     disp_drv.ver_res = LVGL_PORT_V_RES; // Set vertical resolution
 #endif
     disp_drv.flush_cb = flush_callback; // Set the flush callback
+#if !LVGL_PORT_AVOID_TEAR_ENABLE && LVGL_PORT_PARALLEL_FLUSH
+    if (s_flush_q) disp_drv.wait_cb = flush_wait_cb;   // PANEL: espera sin busy-loop
+#endif
     disp_drv.draw_buf = &disp_buf; // Set the draw buffer
     disp_drv.user_data = panel_handle; // Set user data to panel handle
     disp_drv.monitor_cb = lvgl_port_monitor_cb; // ui_test_01: medida del tiempo de render

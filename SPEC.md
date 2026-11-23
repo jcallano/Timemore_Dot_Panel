@@ -286,7 +286,9 @@ Validado en hardware el 2026-11-07. Se basa en las tramas de de1app, [PR #345](h
 | :--- | :--- | :--- |
 | Dibujo de LVGL | **Buffer de 1024 × 30 px en SRAM interna** (60 KB) y **un solo framebuffer** en PSRAM, sin el "modo antiparpadeo 3" del ejemplo de Waveshare | Dibujar directamente en la PSRAM iba a ~1,5 Mpx/s, porque compite con la lectura del bounce buffer (60 MB/s a 30 MHz): 75–120 ms por refresco. Dibujando en SRAM baja a ~30 ms, sin parpadeo ni tearing visibles |
 | Interrupción del bounce buffer | En el **núcleo 1**, donde la deja el ejemplo | En el núcleo 0 producía **mucho parpadeo** |
-| Números principales | **Por dígitos:** una celda por carácter; solo se redibuja la que cambia | Un número entero son ~52.000 px; un dígito, ~11.500 |
+| Números principales | **Por dígitos:** una celda por carácter; solo se redibuja la que cambia. Desde el 2026-11-23, cada celda es una **imagen RGB565 pre-renderizada** al arrancar (0–9 . : -, en las fuentes de 200 y 320 px, ~1 MB en PSRAM) | Un número entero son ~52.000 px; un dígito, ~11.500. Con imagen, pintar un dígito es copiar píxeles en vez de rasterizar un glifo suavizado |
+| Llegada de la muestra | **Por evento:** `bridge_tx` avisa de cada muestra (`bridge_set_sample_hook`) y la tarea de LVGL se despierta y la procesa al instante; el refresco sigue con su temporizador | Antes se sondeaba cada 10 ms. **Forzar además el refresco** (`lv_refr_now`) producía **rayas en algunas filas**: el bounce buffer se quedaba sin datos al coincidir las escrituras en PSRAM con su lectura. Se descartó |
+| Copia al framebuffer | **En serie**, en la tarea de LVGL. La **copia en paralelo** en el núcleo 0 (dos búferes de dibujo) está en el código **desactivada** (`LVGL_PORT_PARALLEL_FLUSH 0`) | La copia en paralelo bajaba el refresco de ~22 a ~17 ms, pero **producía parpadeo** al cambiar el peso: dos núcleos accediendo a la PSRAM a la vez dejan sin datos al bounce buffer |
 | Gráfica | `lv_canvas` propio, de **tamaño fijo**, que dibuja solo el segmento nuevo | `lv_chart` se redibuja entero en cada punto. Sin tamaño fijo, el canvas crecía con sus hijos y `lv_img` repetía la imagen en mosaico: aparecía una gráfica fantasma |
 | Avisos por color | **Marco** de 14 px en lugar del fondo completo | Repintar los 614.400 px de la pantalla costaba 200–250 ms |
 | Secundarios (caudal, temperatura) | Se actualizan a ~3 Hz | A 10 Hz el ruido los hace ilegibles y cuestan redibujos |
@@ -299,6 +301,14 @@ Validado en hardware el 2026-11-07. Se basa en las tramas de de1app, [PR #345](h
 - **latencia del peso (dato nuevo → framebuffer) de ~30 ms**, más 0–30 ms hasta que el panel lo muestra;
 - 10 actualizaciones por segundo sin perder ninguna;
 - memoria libre: **92 KB de RAM interna** (para el BLE de la fase 1) y 6,4 MB de PSRAM.
+
+**Medido en `dot_panel` con la Dot real (2026-11-23, 147 cambios de peso):**
+- de la trama BLE a los píxeles del número, **38 ms de mediana** (p90 60 ms), frente a 66 ms (p90 91 ms) antes de la muestra por evento y los dígitos-imagen;
+- refresco con el peso cambiando: 19–26 ms (~40–50 mil px, de los que 7–10 ms son la copia a la PSRAM);
+- de la acción física a la pantalla, ~0,3 s en total, casi todo en la propia Dot (ver [`docs/DOT_COLA_BLE.md`](docs/DOT_COLA_BLE.md));
+- sin rayas ni parpadeo; 103 KB de RAM interna libres con el BLE activo.
+
+**Regla aprendida:** el límite del panel es el **ancho de banda de la PSRAM**, compartido con la lectura del bounce buffer. Cualquier cambio que concentre o duplique accesos a la PSRAM (forzar refrescos o copiar desde otro núcleo) produce rayas o parpadeo, aunque mejore los tiempos.
 
 **Herramienta:** el firmware vuelca el framebuffer por el puerto serie (comandos `d`/`D`) y [`tools/fbdump.ps1`](tools/fbdump.ps1) lo convierte a PNG. Sirve para distinguir los fallos de dibujo de los del panel.
 

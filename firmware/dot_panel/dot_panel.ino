@@ -147,13 +147,54 @@ static bool set_text(lv_obj_t *l, char *cache, size_t n, const char *txt) {
   return true;
 }
 
+// ---- Digitos pre-renderizados -------------------------------------------------
+// Al arrancar se dibuja cada caracter de DIG_CHARS una sola vez (blanco sobre
+// negro, con su suavizado) en imagenes RGB565 en PSRAM. Las celdas de los
+// numeros son lv_img: cambiar un digito es copiar un bloque de pixeles en vez de
+// rasterizar un glifo de 200-320 px. Mismo aspecto que la etiqueta: misma
+// fuente, misma altura de linea y mismo avance horizontal.
+static DigSet dig200, dig320;
+static void dig_build(DigSet *d, const lv_font_t *f) {
+  d->font = f;
+  int h = lv_font_get_line_height(f);
+  lv_obj_t *cv = lv_canvas_create(lv_scr_act());
+  lv_draw_label_dsc_t ld;
+  lv_draw_label_dsc_init(&ld);
+  ld.font = f;
+  ld.color = lv_color_hex(C_WHITE);
+  for (int i = 0; i < DIG_N; i++) {
+    char ch = DIG_CHARS[i];
+    int w = lv_font_get_glyph_width(f, (uint8_t)ch, 0);
+    if (w < 1) w = 1;
+    size_t sz = (size_t)w * h * sizeof(lv_color_t);
+    uint8_t *buf = (uint8_t *)heap_caps_malloc(sz, MALLOC_CAP_SPIRAM);
+    lv_canvas_set_buffer(cv, buf, w, h, LV_IMG_CF_TRUE_COLOR);
+    lv_canvas_fill_bg(cv, lv_color_hex(C_BLACK), LV_OPA_COVER);
+    char t[2] = {ch, 0};
+    lv_canvas_draw_text(cv, 0, 0, w + 4, &ld, t);
+    lv_img_dsc_t *im = &d->img[i];
+    memset(im, 0, sizeof(*im));
+    im->header.always_zero = 0;
+    im->header.cf = LV_IMG_CF_TRUE_COLOR;
+    im->header.w = w;
+    im->header.h = h;
+    im->data_size = sz;
+    im->data = buf;
+  }
+  lv_obj_del(cv);
+}
+static const lv_img_dsc_t *dig_img(const lv_font_t *f, char ch) {
+  DigSet *d = (f == &font_bebas_320) ? &dig320 : &dig200;
+  const char *p = strchr(DIG_CHARS, ch);
+  return &d->img[p ? (p - DIG_CHARS) : 12];   // desconocido -> '-'
+}
+
 static void seg_create(Seg *s, lv_obj_t *parent) {
   for (int i = 0; i < SEG_MAX; i++) {
-    lv_obj_t *l = lv_label_create(parent);
-    lv_obj_set_style_text_color(l, lv_color_hex(C_WHITE), 0);
-    lv_label_set_text(l, "");
-    lv_obj_add_flag(l, LV_OBJ_FLAG_HIDDEN);
-    s->cell[i] = l;
+    lv_obj_t *c = lv_img_create(parent);
+    lv_obj_add_flag(c, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(c, LV_OBJ_FLAG_CLICKABLE);
+    s->cell[i] = c;
   }
   s->txt[0] = 0;
   s->font = &font_bebas_200;
@@ -168,9 +209,7 @@ static void seg_layout(Seg *s, const char *txt) {
   for (int i = 0; i < SEG_MAX; i++) {
     lv_obj_t *c = s->cell[i];
     if (i < n) {
-      char b[2] = {txt[i], 0};
-      lv_obj_set_style_text_font(c, s->font, 0);
-      lv_label_set_text(c, b);
+      lv_img_set_src(c, dig_img(s->font, txt[i]));
       lv_obj_set_pos(c, x, s->y);
       lv_obj_clear_flag(c, LV_OBJ_FLAG_HIDDEN);
       x += lv_font_get_glyph_width(s->font, (uint8_t)txt[i], 0);
@@ -191,8 +230,7 @@ static bool seg_set(Seg *s, const char *txt) {
   if (!same) { seg_layout(s, txt); return true; }
   for (int i = 0; i < n; i++)
     if (s->txt[i] != txt[i]) {
-      char b[2] = {txt[i], 0};
-      lv_label_set_text(s->cell[i], b);
+      lv_img_set_src(s->cell[i], dig_img(s->font, txt[i]));
       s->txt[i] = txt[i];
     }
   return true;
@@ -472,12 +510,13 @@ static bool sample_poll() {
   return true;
 }
 
-// Redibujado por evento: el puente avisa de cada muestra (tarea bridge_tx) y la
-// tarea de LVGL se despierta al instante, procesa la muestra y refresca la
-// pantalla sin esperar a los temporizadores (antes: sondeo cada 10 ms + refresco
-// cada 15 ms, ~77 ms de mediana desde la trama hasta los pixeles).
+// Muestra por evento: el puente avisa de cada muestra (tarea bridge_tx) y la
+// tarea de LVGL se despierta y la procesa al instante (antes la sondeaba cada
+// 10 ms). El refresco sigue con el ritmo normal de LVGL: forzarlo aqui con
+// lv_refr_now() solo ganaba ~5 ms y producia rayas en el panel (el bounce buffer
+// se quedaba sin datos al coincidir las escrituras en PSRAM con la lectura).
 static void on_sample_wake() {
-  if (sample_poll()) lv_refr_now(NULL);
+  sample_poll();
 }
 static void sample_hook() { lvgl_port_wake(); }
 
@@ -650,6 +689,11 @@ static lv_obj_t *mk_rect(lv_obj_t *p, int x, int y, int w, int h) {
 }
 
 static void build_main() {
+  uint32_t t0 = millis();
+  dig_build(&dig200, &font_bebas_200);
+  dig_build(&dig320, &font_bebas_320);
+  Serial.printf("[UI] digitos pre-renderizados en %lu ms (PSRAM libre %u KB)\n", millis() - t0,
+                (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
   scr_main = mk_screen();
   cap_w = mk_label(scr_main, &font_bebas_56, C_WHITE, "");
   cap_t = mk_label(scr_main, &font_bebas_56, C_WHITE, "TIEMPO");
@@ -1266,6 +1310,7 @@ void loop() {
     uint32_t dt = millis() - last;
     last = millis();
     uint32_t c = g_refr_count, s = g_refr_ms_sum, m = g_refr_ms_max;
+    uint32_t px = g_refr_px_sum, bmp = g_bmp_us_sum;
     uint32_t ln = g_lat_n, lsum = g_lat_us_sum, lmax = g_lat_us_max;
     g_refr_count = 0; g_refr_ms_sum = 0; g_refr_ms_max = 0; g_refr_px_sum = 0;
     g_wait_us_sum = 0; g_bmp_us_sum = 0;
@@ -1281,10 +1326,11 @@ void loop() {
     static uint8_t every5 = 0;
     if (++every5 >= 5) {
       every5 = 0;
-      Serial.printf("[PANEL] refresco %u ms (max %u), %.1f/s | latencia muestra->pantalla %u ms (max %u, n=%u) | "
-                    "heap int %u KB | modo %s\n",
-                    c ? (unsigned)(s / c) : 0, (unsigned)m, c * 1000.0f / dt, lat, (unsigned)(lmax / 1000),
-                    (unsigned)ln, heap, MODE_NAME[cfg.mode]);
+      // por refresco: pixeles redibujados y tiempo copiando al framebuffer (PSRAM)
+      Serial.printf("[PANEL] refresco %u ms (max %u), %.1f/s, %u kpx, copia %.1f ms | latencia muestra->pantalla %u ms "
+                    "(max %u, n=%u) | heap int %u KB | modo %s\n",
+                    c ? (unsigned)(s / c) : 0, (unsigned)m, c * 1000.0f / dt, c ? (unsigned)(px / c / 1000) : 0,
+                    c ? bmp / 1000.0f / c : 0.0f, lat, (unsigned)(lmax / 1000), (unsigned)ln, heap, MODE_NAME[cfg.mode]);
     }
   }
   delay(5);
