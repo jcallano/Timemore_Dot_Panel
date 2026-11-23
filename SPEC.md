@@ -268,7 +268,8 @@ Si el módulo lleva transistor (PNP tipo S8550), alimentarlo a **3V3**: a 5 V no
 Validado en hardware el 2026-11-07. Se basa en las tramas de de1app, [PR #345](https://github.com/decentespresso/de1app/pull/345):
 - Servicio `0xFFF0`: notificaciones en `0xFFF1`, comandos en `0xFFF2`.
 - Peso: tipo `0x01` en el byte 2, `int16` big-endian en los bytes 8–9, en 0.1 g.
-- Secuencia de inicio de la app oficial (dos pasadas), sondeo cada 10 s y tara `A55A030D000200000071`.
+- **Trato de la cola de salida de la Dot (2026-11-23):** MTU 247 negociado tras suscribirse, lectura de varias tramas por notificación, sin secuencia de inicio, un sondeo de batería cada 25 s y tara solo por software. Ver [`docs/DOT_COLA_BLE.md`](docs/DOT_COLA_BLE.md).
+- *Histórico:* el puente heredó de de1app la secuencia de inicio de la app oficial (dos pasadas), un sondeo cada 10 s y la tara `A55A030D000200000071`. Con MTU 23, eso llenaba la cola de la Dot y daba hasta ~2,4 s de retraso.
 - Bonding Just-Works, MAC guardada y reconexión automática.
 - Caudal: EMA calculado con la hora real de llegada de cada muestra.
 
@@ -290,6 +291,7 @@ Validado en hardware el 2026-11-07. Se basa en las tramas de de1app, [PR #345](h
 | Avisos por color | **Marco** de 14 px en lugar del fondo completo | Repintar los 614.400 px de la pantalla costaba 200–250 ms |
 | Secundarios (caudal, temperatura) | Se actualizan a ~3 Hz | A 10 Hz el ruido los hace ilegibles y cuestan redibujos |
 | Temporización | Refresco de LVGL cada 15 ms y espera mínima de su tarea de 5 ms | Menos espera entre que llega el dato y se dibuja |
+| Memoria de LVGL | Pool de 128 KB **en PSRAM** (`LV_MEM_POOL_ALLOC`); el buffer de dibujo sigue en SRAM | Deja la RAM interna al BLE: con la interfaz completa y el puente activo quedan ~105 KB libres |
 
 **Resultado medido:**
 - ~30 ms por refresco;
@@ -353,6 +355,12 @@ En la pantalla de 7" de la 7B (~154 × 86 mm de área útil, 1024×600, ~0.15 mm
 Los encoders son el control principal durante la preparación, porque funcionan con las manos mojadas u ocupadas. El táctil sirve para menús y para revisar la gráfica.
 
 ### 4.4. Modos
+
+> **Actualización del 2026-11-22.** A petición del usuario, la interfaz se organiza en **tres modos: ESPRESSO, POUR OVER y WENDOUGEE** (el puente integrado), más un menú de **AJUSTES**. Están implementados en `firmware/dot_panel` v0.1.0; ver su README.
+> - El modo **Manual** queda cubierto por ESPRESSO y POUR OVER con el timer manual (`INICIO`/`PARAR`/`CERO`).
+> - El modo **Leche** depende de la sonda (fase 4). Queda por decidir si se mantiene como cuarto modo.
+>
+> La descripción original de los modos sigue abajo como referencia de comportamiento.
 
 **Manual**
 - Peso, tiempo y ratio en grande; caudal y temperatura (si hay sonda); timer con el encoder derecho.
@@ -502,8 +510,19 @@ Cada fase termina con un firmware que funciona, probado con la Dot real, y con u
 - Documentar el perfil BLE del panel y el protocolo I2C; publicar el hardware completo.
 - **Criterio de aceptación:** Decaid y Beanconqueror muestran la temperatura del panel en vivo.
 
-### Fase 8 (opcional) — Puente integrado
+### Fase 8 — Puente integrado (adelantada: modo WENDOUGEE)
 - Añadir al panel la emulación BooKoo hacia Decaid (la función del puente). Así el panel muestra el peso **mientras** Decaid controla la parada por peso, y desaparece la limitación de una sola conexión a la Dot.
+- **2026-11-22:** implementado como el modo WENDOUGEE de `firmware/dot_panel`, reutilizando el puente validado.
+  - Probado con un cliente que imita a la Wendougee ([`tools/fake_wendougee`](tools/fake_wendougee/fake_wendougee.ino)): conecta, recibe tramas BooKoo válidas y el panel lo muestra como conectado.
+  - **Pendiente:** probar con la Dot y la Wendougee reales.
+
+### Fase 8b — Actualización OTA por BLE (decidida el 2026-11-22)
+- **Placa de 7":** "modo actualización" en AJUSTES → ACTUALIZAR. Desconecta la Dot y la máquina y anuncia un servicio GATT de OTA. El firmware llega en bloques (escritura sin respuesta, MTU grande y PHY 2M) y se graba con `esp_ota_*` en la otra ranura de aplicación; al terminar se verifica y se reinicia.
+- **Coprocesador:** el mismo servicio OTA con su propia radio BLE.
+- **Cliente:** una página web con **Web Bluetooth** (Chrome en PC o Android) en el repo o en GitHub Pages, donde se elige el `.bin` y el dispositivo.
+- **Criterio de aceptación:**
+  - actualizar cada micro sin cables en menos de 1 minuto;
+  - un corte a mitad de la carga deja el firmware anterior funcionando.
 
 ### Fase 9 (opcional) — Boya inalámbrica con supercondensador
 - Segundo dispositivo del ecosistema, con su propio repo:
@@ -539,6 +558,10 @@ Todas se resuelven con pruebas físicas en la **fase 0**, salvo la 5.
 | 2026-11-22 | **Dibujo de LVGL en SRAM interna** (buffer de 1024 × 30 px y un solo framebuffer), en vez del modo antiparpadeo 3 de Waveshare | Medido en `ui_test_01`: dibujar en la PSRAM costaba 75–120 ms por refresco; en SRAM, ~30 ms, sin parpadeo ni tearing visibles. Crear el panel en el núcleo 0 se probó y se descartó porque producía mucho parpadeo. |
 | 2026-11-22 | **Números grandes con Bebas Neue** (OFL), dibujados **dígito a dígito**; **avisos con un marco de color** en vez del fondo completo; **gráfica en un `lv_canvas` propio** | Con Bebas Neue, los tres números caben en una fila a ~21 mm (o el peso a ~34 mm en el layout B) y el usuario los lee sin gafas. Dibujar por dígitos, el marco y el canvas incremental reducen los píxeles por refresco de 150.000 a ~60.000, y la latencia del peso queda en ~30 ms. |
 | 2026-11-22 | **Se confirma el coprocesador** (se valoró hacerlo todo con la placa de 7" y se descarta) | La CPU de la 7B aguantaría la PT100 y los mandos, pero solo deja libres el I2C y el GPIO 6: el MAX31865 (SPI) obligaría a un apaño con la ranura microSD o a cambiar a termopar. Además, el WiFi para Home Assistant no cabe con holgura junto al BLE en los 92 KB de RAM interna libres. El usuario quiere un panel completo y único para los amantes del café, con Home Assistant incluido. |
+| 2026-11-22 | **Tres modos de uso: ESPRESSO, POUR OVER y WENDOUGEE, más AJUSTES** (menú con botones grandes) | Petición del usuario. WENDOUGEE es el puente integrado (adelanta la fase 8): el panel se anuncia como BooKoo y muestra la preparación mientras la máquina la controla. En ESPRESSO y POUR OVER el anuncio BooKoo se apaga. Implementado en `firmware/dot_panel` v0.1.0. |
+| 2026-11-22 | **Actualización OTA por BLE para los dos micros**, desde una página web con Web Bluetooth (Chrome en PC o Android) | Petición del usuario. No requiere app ni credenciales WiFi. Ambos ESP32-S3 tienen radio BLE y tablas de particiones con dos ranuras de aplicación (OTA). En la placa de 7", un "modo actualización" corta la Dot y la máquina durante la carga. Pendiente de implementar. |
+| 2026-11-23 | **Con la Dot: MTU 247 negociado tras suscribirse, lectura de varias tramas por notificación, sin secuencia de inicio, un sondeo de batería cada 25 s y tara solo por software** (sustituye al trato heredado de de1app: 12 comandos de inicio, sondeo cada 10 s y tara física) | La Dot envía una notificación cada 100 ms desde una cola; con MTU 23 cada respuesta o aviso de batería añadía 100 ms de retraso permanente, hasta ~2,4 s. Con MTU grande la Dot junta tramas y la vacía: retraso medido ~0,1 s estable. Detalle, mediciones y método en [`docs/DOT_COLA_BLE.md`](docs/DOT_COLA_BLE.md). |
+| 2026-11-22 | **Pool de memoria de LVGL (128 KB) en PSRAM** (`LV_MEM_POOL_ALLOC` en `lv_conf.h`) | Con el pool en la RAM interna, NimBLE no arrancaba por falta de memoria. En PSRAM quedan ~105 KB internos libres con el BLE activo, y el refresco no empeora (12–30 ms). |
 | 2026-11-08 | **Interfaz con LVGL** (sustituye a U8g2 + LovyanGFX) | Con 1024×600 y táctil, LVGL da fuentes grandes, gráficas y botones listos; es lo que usan los ejemplos oficiales de la placa. |
 | 2026-11-08 | **Conector GX16 de 3 pines** para la sonda, **interruptor basculante** de ≥ 3 A y **kit de cables PH2.0** | GX16: robusto y con buenos contactos (en una PT100 unas décimas de ohmio ya se notan). Basculante: los deslizantes pequeños solo aguantan 0.5 A. PH2.0: el conector de batería, I2C, 5 V y sensor de la placa. |
 | 2026-11-08 | **Insertos roscados de latón** en la caja impresa, colocados con el **soldador Aneng SL108** con punta para insertos | Roscas metálicas que aguantan abrir la caja muchas veces (para cambiar la batería o hacer ajustes). |
